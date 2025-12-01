@@ -3,12 +3,7 @@ Trading strategy logic: buy and sell conditions
 """
 import logging
 from typing import List, Tuple, Optional
-from config import (
-    ENTRY_TOTAL_MOVE,
-    ENTRY_MIN_SECOND,
-    TRAILING_SHARE,
-    MAX_LOSS_PERCENT
-)
+from config import MAX_LOSS_PERCENT
 
 logger = logging.getLogger(__name__)
 
@@ -79,73 +74,112 @@ def calculate_four_candle_analysis(candles: List[List]) -> Tuple[List[float], Li
 
 def should_buy(candles: List[List]) -> bool:
     """
-    Determine if buy conditions are met
+    Scalp strategy: Entry based on 2-candle OR 4-candle momentum with filters.
     
-    Original conditions (all must be true):
-    1. Both candles must be green: r1 > 0 and r2 > 0
-    2. Combined strength >= 0.7%: r1 + r2 >= 0.7
-    3. Momentum increases: r2 >= r1
-    4. Second candle strong enough: r2 >= 0.35
-    
-    New condition A:
-    - Last two candles combined >= 0.5% AND second candle >= 0.25%
-    
-    New condition B:
-    - Within four consecutive candles, one (not the last) is red, and total gain of others >= 0.7%
+    Returns True ONLY if:
+    - At least one momentum condition is satisfied (two-candle OR four-candle)
+    AND
+    - All four filters are satisfied (volatility, volume, distance-from-high, synthetic M5 trend)
     
     Args:
-        candles: List of klines (need at least 3 for original, 4 for condition B)
+        candles: List of klines
     
     Returns:
-        True if any buy condition is met
+        True if buy conditions are met
     """
     try:
-        # Original condition: Check if we have at least 3 candles
+        # ============================================
+        # FILTER A: Volatility Filter (first gate)
+        # ============================================
+        if len(candles) < 3:
+            return False
+        
+        # Check last 3 candles for volatility
+        for i in range(-3, 0):  # Last 3 candles
+            candle = candles[i]
+            c_open = float(candle[1])
+            c_high = float(candle[2])
+            c_low = float(candle[3])
+            vol = (c_high - c_low) / c_open * 100.0
+            
+            if vol > 0.6:
+                logger.debug(f"Volatility filter failed: candle {i} has vol={vol:.4f}% > 0.6%")
+                return False
+        
+        # ============================================
+        # FILTER B: Volume Filter (second gate)
+        # ============================================
+        if len(candles) >= 20:
+            # Calculate average volume of last 20 candles
+            volumes = [float(candle[5]) for candle in candles[-20:]]
+            average_volume = sum(volumes) / len(volumes)
+            
+            # Get last candle volume
+            last_volume = float(candles[-1][5])
+            
+            if last_volume < average_volume:
+                logger.debug(f"Volume filter failed: last_volume={last_volume:.2f} < average={average_volume:.2f}")
+                return False
+        
+        # ============================================
+        # FILTER C: Distance-from-local-high Filter (third gate)
+        # ============================================
+        if len(candles) >= 20:
+            # Get last 20 candles
+            last_20_candles = candles[-20:]
+            
+            # Find highest high
+            highest_high = max(float(c[2]) for c in last_20_candles)
+            
+            # Get last close
+            last_close = float(candles[-1][4])
+            
+            # Calculate distance from high
+            distance_from_high = (highest_high - last_close) / last_close * 100.0
+            
+            if distance_from_high <= 0.25:
+                logger.debug(f"Distance-from-high filter failed: distance={distance_from_high:.4f}% <= 0.25%")
+                return False
+        
+        # ============================================
+        # FILTER D: Higher Timeframe Trend Filter (synthetic M5, gate 4)
+        # ============================================
+        if len(candles) >= 5:
+            # Take last 5 candles to form synthetic M5
+            m5_open = float(candles[-5][1])   # open of first candle in 5-candle block
+            m5_close = float(candles[-1][4])  # close of last candle in 5-candle block
+            
+            if m5_close <= m5_open:
+                logger.debug(f"Synthetic M5 trend filter failed: m5_close={m5_close:.4f} <= m5_open={m5_open:.4f}")
+                return False
+        
+        # ============================================
+        # MOMENTUM CONDITIONS (after all filters pass)
+        # ============================================
+        
+        # Two-candle momentum condition
         if len(candles) >= 3:
             r1, r2 = calculate_candle_changes(candles)
             
-            logger.debug(f"Candle analysis: r1={r1:.4f}%, r2={r2:.4f}%")
-            
-            # Original condition: All 4 original conditions must be true
-            original_condition = (
-                r1 > 0 and r2 > 0 and  # Both green
-                (r1 + r2) >= ENTRY_TOTAL_MOVE and  # Combined >= 0.7%
-                r2 >= r1 and  # Momentum increases
-                r2 >= ENTRY_MIN_SECOND  # Second candle >= 0.35%
-            )
-            
-            if original_condition:
-                logger.info(f"BUY SIGNAL (Original): r1={r1:.4f}%, r2={r2:.4f}%, combined={r1+r2:.4f}%")
-                return True
-            
-            # New condition A: Last two candles combined >= 0.5% AND second candle >= 0.25%
-            condition_a = (r1 + r2) >= 0.5 and r2 >= 0.25
-            
-            if condition_a:
-                logger.info(f"BUY SIGNAL (Condition A): r1={r1:.4f}%, r2={r2:.4f}%, combined={r1+r2:.4f}%")
+            if r1 >= 0.20 and r2 >= 0.30:
+                logger.info(f"BUY SIGNAL (TWO-CANDLE): r1={r1:.4f}%, r2={r2:.4f}%, combined={r1+r2:.4f}%")
                 return True
         
-        # New condition B: Within four consecutive candles, one (not the last) is red, 
-        # and total gain of others >= 0.7%
+        # Four-candle momentum condition
         if len(candles) >= 4:
             changes, is_red = calculate_four_candle_analysis(candles)
             
-            logger.debug(f"Four-candle analysis: changes={[f'{c:.4f}%' for c in changes]}, is_red={is_red}")
+            total_gain = sum(changes)
+            last_not_red = not is_red[3]  # Last candle (index 3) must NOT be red
             
-            # Check if any of the first 3 candles (not the last one) is red
-            for i in range(3):  # Check positions 0, 1, 2 (not 3, which is the last)
-                if is_red[i]:
-                    # Calculate total gain of the other candles (exclude the red one)
-                    total_gain = sum(changes[j] for j in range(4) if j != i)
-                    
-                    if total_gain >= 0.7:
-                        logger.info(
-                            f"BUY SIGNAL (Condition B - red at pos {i}): "
-                            f"changes={[f'{c:.4f}%' for c in changes]}, "
-                            f"total_gain={total_gain:.4f}%"
-                        )
-                        return True
+            if total_gain >= 0.8 and last_not_red:
+                logger.info(
+                    f"BUY SIGNAL (FOUR-CANDLE): changes={[f'{c:.4f}%' for c in changes]}, "
+                    f"total_gain={total_gain:.4f}%"
+                )
+                return True
         
+        # Both momentum conditions failed
         return False
         
     except Exception as e:
@@ -159,7 +193,7 @@ def should_sell(
     peak_price: float
 ) -> Tuple[bool, str]:
     """
-    Determine if sell conditions are met (trailing stop or hard stop-loss)
+    Scalp strategy: Exit with hard stop-loss at -0.4% or trailing TP at 0.2% drop from peak.
     
     Args:
         current_price: Current market price
@@ -175,8 +209,8 @@ def should_sell(
         return False, ""
     
     # Calculate profits
-    profit_peak = (peak_price - buy_price) / buy_price
     profit_now = (current_price - buy_price) / buy_price
+    profit_peak = (peak_price - buy_price) / buy_price
     
     logger.debug(
         f"Price check: current={current_price:.4f}, buy={buy_price:.4f}, "
@@ -184,22 +218,21 @@ def should_sell(
         f"profit_peak={profit_peak*100:.2f}%"
     )
     
-    # Hard stop-loss: -0.5% loss
+    # Hard stop-loss: -0.4% loss
     if profit_now <= -MAX_LOSS_PERCENT:
         logger.warning(
             f"STOP LOSS triggered: profit_now={profit_now*100:.2f}% <= -{MAX_LOSS_PERCENT*100}%"
         )
         return True, "STOP_LOSS"
     
-    # Trailing stop: if we've had profit, check if we've given back 20% of it
-    if profit_peak > 0:
-        min_allowed_profit = profit_peak * (1 - TRAILING_SHARE)
+    # Trailing TP: price drop of 0.20% from peak
+    if peak_price > buy_price:
+        drawdown_from_peak = (peak_price - current_price) / peak_price
         
-        if profit_now <= min_allowed_profit:
+        if drawdown_from_peak >= 0.002:  # 0.20%
             logger.warning(
-                f"TRAILING STOP triggered: profit_now={profit_now*100:.2f}% <= "
-                f"min_allowed={min_allowed_profit*100:.2f}% "
-                f"(peak_profit={profit_peak*100:.2f}%, trailing={TRAILING_SHARE*100}%)"
+                f"TRAILING STOP triggered: drawdown_from_peak={drawdown_from_peak*100:.2f}%, "
+                f"peak_price={peak_price:.4f}, current_price={current_price:.4f}"
             )
             return True, "TRAILING_STOP"
     

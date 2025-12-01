@@ -53,6 +53,18 @@ class Exchange:
             logger.error(f"Unexpected error getting balance: {e}")
             raise
     
+    def get_free_balance(self, asset: str) -> float:
+        """
+        Get free balance of an asset (alias for get_balance for clarity)
+        
+        Args:
+            asset: Asset symbol (e.g., 'USDC', 'SOL')
+            
+        Returns:
+            Free balance as float
+        """
+        return self.get_balance(asset)
+    
     def get_klines(self, symbol: str, interval: str, limit: int = 3) -> List[List]:
         """
         Get klines (candles) for a symbol
@@ -213,8 +225,8 @@ class Exchange:
             logger.warning("No USDC balance available for buy")
             return None
         
-        # Use 99.9% to leave small buffer for fees and rounding
-        usdc_to_use = usdc_balance * 0.999
+        # Use 99.95% to maximize position size while leaving small buffer for fees and rounding
+        usdc_to_use = usdc_balance * 0.9995
         
         # Get symbol info for precision
         try:
@@ -240,7 +252,7 @@ class Exchange:
                 return None
             
             current_price = self.get_current_price(symbol)
-            logger.info(f"Buying with {usdc_to_use:.2f} USDC @ {current_price:.4f}")
+            logger.info(f"Buying with {usdc_to_use:.2f} USDC ({usdc_to_use/usdc_balance*100:.2f}% of {usdc_balance:.2f} USDC balance) @ {current_price:.4f}")
             
             # Use quoteOrderQty for market buy (buy with USDC amount)
             max_retries = 3
@@ -317,7 +329,7 @@ class Exchange:
                 return None
             
             current_price = self.get_current_price(symbol)
-            logger.info(f"Selling {quantity:.6f} {symbol} @ {current_price:.4f}")
+            logger.info(f"Selling {quantity:.6f} SOL ({quantity/sol_balance*100:.2f}% of {sol_balance:.6f} SOL balance) @ {current_price:.4f}")
             return self.market_sell(symbol, quantity)
         except Exception as e:
             logger.error(f"Error in market_sell_all_sol: {e}")

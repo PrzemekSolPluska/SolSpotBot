@@ -189,13 +189,13 @@ def main_loop():
                 logger.debug("Not holding - checking for buy signals...")
                 
                 # Get klines
-                klines = exchange.get_klines(SYMBOL, TIMEFRAME, limit=4)
+                klines = exchange.get_klines(SYMBOL, TIMEFRAME, limit=20)
                 
                 # Activity: successfully fetched candles
                 last_activity_ts = time.time()
                 watchdog_alert_sent = False
                 
-                if len(klines) < 4:
+                if len(klines) < 3:
                     logger.warning("Not enough candles, waiting...")
                     time.sleep(LOOP_INTERVAL)
                     continue

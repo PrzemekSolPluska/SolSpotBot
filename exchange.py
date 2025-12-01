@@ -3,6 +3,7 @@ Exchange wrapper for Binance Spot API using python-binance
 """
 import time
 import logging
+import math
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 from typing import Optional, Dict, List, Tuple
@@ -52,6 +53,51 @@ class Exchange:
         except Exception as e:
             logger.error(f"Unexpected error getting balance: {e}")
             raise
+
+    def get_free_balance(self, asset: str) -> float:
+        """
+        Get free balance of an asset (alias for get_balance for clarity)
+
+        Args:
+            asset: Asset symbol (e.g., 'USDC', 'SOL')
+
+        Returns:
+            Free balance as float
+        """
+        return self.get_balance(asset)
+
+    def sanitize_quantity(self, symbol: str, qty: float) -> float:
+        """
+        Round DOWN quantity to Binance stepSize for the given symbol.
+
+        For SOL/USDC the stepSize is 0.001, so we hardcode step = 0.001
+        and always round down to 3 decimal places to avoid APIError
+        (-1111) "quantity has too much precision".
+
+        Args:
+            symbol: Trading pair symbol (e.g., 'SOLUSDC'). Currently only
+                    used for clarity; logic is hardcoded for SOLUSDC.
+            qty:    Raw quantity to sanitize.
+
+        Returns:
+            Quantity rounded down to a Binance-compliant step.
+        """
+        if qty <= 0:
+            return 0.0
+
+        # Hardcode stepSize for SOL/USDC
+        step = 0.001
+
+        # Round DOWN to the nearest step
+        stepped = math.floor(qty / step) * step
+
+        # Limit to 3 decimals to match step precision
+        sanitized = round(stepped, 3)
+
+        if sanitized <= 0:
+            logger.debug(f"sanitize_quantity({symbol}): qty={qty} -> sanitized={sanitized} (non-positive after rounding)")
+
+        return sanitized
     
     def get_free_balance(self, asset: str) -> float:
         """
@@ -132,6 +178,11 @@ class Exchange:
         """
         max_retries = 3
         retry_delay = 2
+
+        # Ensure quantity respects Binance step size (e.g., SOL/USDC step=0.001)
+        quantity = self.sanitize_quantity(symbol, quantity)
+        if quantity <= 0:
+            raise ValueError(f"Sanitized BUY quantity is non-positive for {symbol}")
         
         for attempt in range(max_retries):
             try:
@@ -177,6 +228,11 @@ class Exchange:
         """
         max_retries = 3
         retry_delay = 2
+
+        # Ensure quantity respects Binance step size (e.g., SOL/USDC step=0.001)
+        quantity = self.sanitize_quantity(symbol, quantity)
+        if quantity <= 0:
+            raise ValueError(f"Sanitized SELL quantity is non-positive for {symbol}")
         
         for attempt in range(max_retries):
             try:
@@ -319,17 +375,23 @@ class Exchange:
                     break
             
             if step_size:
-                # Round down to step size
-                quantity = (sol_balance // step_size) * step_size
+                # Round down to LOT_SIZE step first
+                raw_qty = math.floor(sol_balance / step_size) * step_size
             else:
-                quantity = sol_balance
+                raw_qty = sol_balance
+
+            # Apply final sanitization to comply with step size (e.g., 0.001 for SOL/USDC)
+            quantity = self.sanitize_quantity(symbol, raw_qty)
             
             if quantity <= 0:
                 logger.warning(f"Insufficient balance: {sol_balance:.6f} SOL")
                 return None
             
             current_price = self.get_current_price(symbol)
-            logger.info(f"Selling {quantity:.6f} SOL ({quantity/sol_balance*100:.2f}% of {sol_balance:.6f} SOL balance) @ {current_price:.4f}")
+            logger.info(
+                f"Selling {quantity:.6f} SOL ({(quantity/sol_balance*100.0):.2f}% of {sol_balance:.6f} SOL balance) "
+                f"@ {current_price:.4f}"
+            )
             return self.market_sell(symbol, quantity)
         except Exception as e:
             logger.error(f"Error in market_sell_all_sol: {e}")

@@ -7,6 +7,14 @@ from config import MAX_LOSS_PERCENT
 
 logger = logging.getLogger(__name__)
 
+# Breakout → Retest scalping strategy constants
+CONSOLIDATION_LEN = 6
+MAX_CONS_RANGE_PER_CANDLE = 0.35
+MAX_CONS_TOTAL_RANGE = 0.7
+MIN_BREAKOUT_BODY = 0.45
+MIN_RETRACE_FRACTION = 0.30
+MAX_RETRACE_FRACTION = 0.70
+
 
 def calculate_candle_changes(candles: List[List]) -> Tuple[float, float]:
     """
@@ -74,12 +82,11 @@ def calculate_four_candle_analysis(candles: List[List]) -> Tuple[List[float], Li
 
 def should_buy(candles: List[List]) -> bool:
     """
-    Scalp strategy: Entry based on 2-candle OR 4-candle momentum with filters.
+    Dynamic Breakout → Retest scalping strategy.
     
-    Returns True ONLY if:
-    - At least one momentum condition is satisfied (two-candle OR four-candle)
-    AND
-    - All four filters are satisfied (volatility, volume, distance-from-high, synthetic M5 trend)
+    1. Detect a consolidation zone (tight range, last 6 candles).
+    2. Detect a strong breakout candle piercing the consolidation.
+    3. Enter on a retest if the pullback fits retracement criteria.
     
     Args:
         candles: List of klines
@@ -87,104 +94,60 @@ def should_buy(candles: List[List]) -> bool:
     Returns:
         True if buy conditions are met
     """
-    try:
-        # ============================================
-        # FILTER A: Volatility Filter (first gate)
-        # ============================================
-        if len(candles) < 3:
+    if len(candles) < CONSOLIDATION_LEN + 2:
+        return False
+    
+    recent = candles[-(CONSOLIDATION_LEN + 2):]
+    
+    cons = recent[:-2]
+    breakout = recent[-2]
+    retest = recent[-1]
+    
+    cons_high = max(float(c[2]) for c in cons)
+    cons_low = min(float(c[3]) for c in cons)
+    
+    total_cons_range = (cons_high - cons_low) / cons_low * 100.0
+    if total_cons_range > MAX_CONS_TOTAL_RANGE:
+        return False
+    
+    for c in cons:
+        rng = (float(c[2]) - float(c[3])) / float(c[3]) * 100.0
+        if rng > MAX_CONS_RANGE_PER_CANDLE:
             return False
-        
-        # Check last 3 candles for volatility
-        for i in range(-3, 0):  # Last 3 candles
-            candle = candles[i]
-            c_open = float(candle[1])
-            c_high = float(candle[2])
-            c_low = float(candle[3])
-            vol = (c_high - c_low) / c_open * 100.0
-            
-            if vol > 0.6:
-                logger.debug(f"Volatility filter failed: candle {i} has vol={vol:.4f}% > 0.6%")
-                return False
-        
-        # ============================================
-        # FILTER B: Volume Filter (second gate)
-        # ============================================
-        if len(candles) >= 20:
-            # Calculate average volume of last 20 candles
-            volumes = [float(candle[5]) for candle in candles[-20:]]
-            average_volume = sum(volumes) / len(volumes)
-            
-            # Get last candle volume
-            last_volume = float(candles[-1][5])
-            
-            if last_volume < average_volume:
-                logger.debug(f"Volume filter failed: last_volume={last_volume:.2f} < average={average_volume:.2f}")
-                return False
-        
-        # ============================================
-        # FILTER C: Distance-from-local-high Filter (third gate)
-        # ============================================
-        if len(candles) >= 20:
-            # Get last 20 candles
-            last_20_candles = candles[-20:]
-            
-            # Find highest high
-            highest_high = max(float(c[2]) for c in last_20_candles)
-            
-            # Get last close
-            last_close = float(candles[-1][4])
-            
-            # Calculate distance from high
-            distance_from_high = (highest_high - last_close) / last_close * 100.0
-            
-            if distance_from_high <= 0.25:
-                logger.debug(f"Distance-from-high filter failed: distance={distance_from_high:.4f}% <= 0.25%")
-                return False
-        
-        # ============================================
-        # FILTER D: Higher Timeframe Trend Filter (synthetic M5, gate 4)
-        # ============================================
-        if len(candles) >= 5:
-            # Take last 5 candles to form synthetic M5
-            m5_open = float(candles[-5][1])   # open of first candle in 5-candle block
-            m5_close = float(candles[-1][4])  # close of last candle in 5-candle block
-            
-            if m5_close <= m5_open:
-                logger.debug(f"Synthetic M5 trend filter failed: m5_close={m5_close:.4f} <= m5_open={m5_open:.4f}")
-                return False
-        
-        # ============================================
-        # MOMENTUM CONDITIONS (after all filters pass)
-        # ============================================
-        
-        # Two-candle momentum condition
-        if len(candles) >= 3:
-            r1, r2 = calculate_candle_changes(candles)
-            
-            if r1 >= 0.20 and r2 >= 0.30:
-                logger.info(f"BUY SIGNAL (TWO-CANDLE): r1={r1:.4f}%, r2={r2:.4f}%, combined={r1+r2:.4f}%")
-                return True
-        
-        # Four-candle momentum condition
-        if len(candles) >= 4:
-            changes, is_red = calculate_four_candle_analysis(candles)
-            
-            total_gain = sum(changes)
-            last_not_red = not is_red[3]  # Last candle (index 3) must NOT be red
-            
-            if total_gain >= 0.8 and last_not_red:
-                logger.info(
-                    f"BUY SIGNAL (FOUR-CANDLE): changes={[f'{c:.4f}%' for c in changes]}, "
-                    f"total_gain={total_gain:.4f}%"
-                )
-                return True
-        
-        # Both momentum conditions failed
+    
+    breakout_open = float(breakout[1])
+    breakout_close = float(breakout[4])
+    breakout_body = (breakout_close - breakout_open) / breakout_open * 100.0
+    
+    if breakout_close <= cons_high:
         return False
-        
-    except Exception as e:
-        logger.error(f"Error in should_buy: {e}")
+    if breakout_body < MIN_BREAKOUT_BODY:
         return False
+    
+    retest_low = float(retest[3])
+    pullback = cons_high - retest_low
+    full_break = breakout_close - cons_high
+    
+    if full_break <= 0:
+        return False
+    
+    retrace_fraction = pullback / full_break
+    
+    if retrace_fraction < MIN_RETRACE_FRACTION:
+        return False
+    if retrace_fraction > MAX_RETRACE_FRACTION:
+        return False
+    
+    if float(retest[4]) <= float(retest[1]):
+        return False
+    
+    logger.info(
+        f"BUY SIGNAL (BREAKOUT-RETEST): "
+        f"cons_range={total_cons_range:.4f}%, "
+        f"breakout_body={breakout_body:.4f}%, "
+        f"retrace_fraction={retrace_fraction:.4f}"
+    )
+    return True
 
 
 def should_sell(

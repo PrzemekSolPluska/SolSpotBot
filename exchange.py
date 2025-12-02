@@ -66,38 +66,18 @@ class Exchange:
         """
         return self.get_balance(asset)
 
-    def sanitize_quantity(self, symbol: str, qty: float) -> float:
+    def sanitize_quantity(self, qty: float) -> float:
         """
-        Round DOWN quantity to Binance stepSize for the given symbol.
-
-        For SOL/USDC the stepSize is 0.001, so we hardcode step = 0.001
-        and always round down to 3 decimal places to avoid APIError
-        (-1111) "quantity has too much precision".
-
+        Binance rejects quantities with excessive precision (ERROR -1111).
+        SOL/USDC generally accepts 3 decimal places.
+        
         Args:
-            symbol: Trading pair symbol (e.g., 'SOLUSDC'). Currently only
-                    used for clarity; logic is hardcoded for SOLUSDC.
-            qty:    Raw quantity to sanitize.
-
+            qty: Raw quantity to sanitize
+            
         Returns:
-            Quantity rounded down to a Binance-compliant step.
+            Quantity rounded to 3 decimal places
         """
-        if qty <= 0:
-            return 0.0
-
-        # Hardcode stepSize for SOL/USDC
-        step = 0.001
-
-        # Round DOWN to the nearest step
-        stepped = math.floor(qty / step) * step
-
-        # Limit to 3 decimals to match step precision
-        sanitized = round(stepped, 3)
-
-        if sanitized <= 0:
-            logger.debug(f"sanitize_quantity({symbol}): qty={qty} -> sanitized={sanitized} (non-positive after rounding)")
-
-        return sanitized
+        return float(f"{qty:.3f}")
     
     def get_free_balance(self, asset: str) -> float:
         """
@@ -180,7 +160,7 @@ class Exchange:
         retry_delay = 2
 
         # Ensure quantity respects Binance step size (e.g., SOL/USDC step=0.001)
-        quantity = self.sanitize_quantity(symbol, quantity)
+        quantity = self.sanitize_quantity(quantity)
         if quantity <= 0:
             raise ValueError(f"Sanitized BUY quantity is non-positive for {symbol}")
         
@@ -230,7 +210,7 @@ class Exchange:
         retry_delay = 2
 
         # Ensure quantity respects Binance step size (e.g., SOL/USDC step=0.001)
-        quantity = self.sanitize_quantity(symbol, quantity)
+        quantity = self.sanitize_quantity(quantity)
         if quantity <= 0:
             raise ValueError(f"Sanitized SELL quantity is non-positive for {symbol}")
         
@@ -281,36 +261,19 @@ class Exchange:
             logger.warning("No USDC balance available for buy")
             return None
         
-        # Use 99.95% to maximize position size while leaving small buffer for fees and rounding
-        usdc_to_use = usdc_balance * 0.9995
-        
-        # Get symbol info for precision
         try:
-            exchange_info = self.client.get_exchange_info()
-            symbol_info = next(s for s in exchange_info['symbols'] if s['symbol'] == symbol)
+            current_price = self.get_current_price(symbol)
             
-            # Get quote precision (for USDC amount)
-            quote_precision = None
-            for filter_item in symbol_info['filters']:
-                if filter_item['filterType'] == 'NOTIONAL':
-                    min_notional = float(filter_item.get('minNotional', 0))
-                    if min_notional > 0:
-                        quote_precision = len(str(min_notional).split('.')[-1]) if '.' in str(min_notional) else 0
+            # Use 100% of available USDC balance
+            balance = float(usdc_balance)
+            qty = self.sanitize_quantity(balance / current_price)
             
-            # Round USDC amount to appropriate precision
-            if quote_precision is not None:
-                usdc_to_use = round(usdc_to_use, quote_precision)
-            else:
-                usdc_to_use = round(usdc_to_use, 2)  # Default to 2 decimal places
-            
-            if usdc_to_use <= 0:
+            if qty <= 0:
                 logger.warning(f"Insufficient balance: {usdc_balance:.2f} USDC")
                 return None
             
-            current_price = self.get_current_price(symbol)
-            logger.info(f"Buying with {usdc_to_use:.2f} USDC ({usdc_to_use/usdc_balance*100:.2f}% of {usdc_balance:.2f} USDC balance) @ {current_price:.4f}")
+            logger.info(f"Buying {qty:.6f} SOL with {balance:.2f} USDC (100% of balance) @ {current_price:.4f}")
             
-            # Use quoteOrderQty for market buy (buy with USDC amount)
             max_retries = 3
             retry_delay = 2
             
@@ -320,7 +283,7 @@ class Exchange:
                         symbol=symbol,
                         side='BUY',
                         type='MARKET',
-                        quoteOrderQty=usdc_to_use
+                        quantity=self.sanitize_quantity(qty)
                     )
                     logger.info(f"Market BUY executed: {order}")
                     return order
@@ -381,7 +344,7 @@ class Exchange:
                 raw_qty = sol_balance
 
             # Apply final sanitization to comply with step size (e.g., 0.001 for SOL/USDC)
-            quantity = self.sanitize_quantity(symbol, raw_qty)
+            quantity = self.sanitize_quantity(raw_qty)
             
             if quantity <= 0:
                 logger.warning(f"Insufficient balance: {sol_balance:.6f} SOL")

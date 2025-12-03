@@ -105,7 +105,7 @@ class Exchange:
         
         Args:
             symbol: Trading pair (e.g., 'SOLUSDC')
-            interval: Timeframe (e.g., '3m')
+            interval: Timeframe (e.g., '1m')
             limit: Number of candles to retrieve
             
         Returns:
@@ -255,7 +255,7 @@ class Exchange:
     
     def market_buy_all_usdc(self, symbol: str) -> Optional[Dict]:
         """
-        Market buy using 100% of USDC balance
+        Market buy using almost all USDC balance (99.5% with safety buffer)
         
         Args:
             symbol: Trading pair (e.g., 'SOLUSDC')
@@ -263,24 +263,34 @@ class Exchange:
         Returns:
             Order result or None if insufficient balance
         """
-        usdc_balance = self.get_balance("USDC")
+        SAFETY_BUFFER = 0.995  # Use 99.5% of USDC to leave buffer for fees and rounding
         
-        if usdc_balance <= 0:
+        balance_usdc = self.get_free_balance("USDC")
+        
+        if balance_usdc <= 0:
             logger.warning("No USDC balance available for buy")
             return None
         
         try:
             current_price = self.get_current_price(symbol)
             
-            # Use 100% of available USDC balance
-            balance = float(usdc_balance)
-            qty = self.sanitize_quantity(balance / current_price)
+            # Apply safety buffer to leave USDC for fees and rounding
+            usdc_to_use = balance_usdc * SAFETY_BUFFER
+            
+            # Compute quantity
+            qty = usdc_to_use / current_price
+            
+            # Apply precision filter (floor to 3 decimal places)
+            qty = self.sanitize_quantity(qty)
             
             if qty <= 0:
-                logger.warning(f"Insufficient balance: {usdc_balance:.2f} USDC")
+                logger.warning(f"Insufficient balance: {balance_usdc:.2f} USDC")
                 return None
             
-            logger.info(f"Buying {qty:.6f} SOL with {balance:.2f} USDC (100% of balance) @ {current_price:.4f}")
+            logger.info(
+                f"Calculated BUY qty (all-in): balance_usdc={balance_usdc:.4f}, "
+                f"usdc_to_use={usdc_to_use:.4f}, price={current_price:.4f}, qty={qty:.3f}"
+            )
             
             max_retries = 3
             retry_delay = 2
@@ -321,7 +331,7 @@ class Exchange:
     
     def market_sell_all_sol(self, symbol: str) -> Optional[Dict]:
         """
-        Market sell 100% of SOL balance
+        Market sell 100% of SOL balance (close full position)
         
         Args:
             symbol: Trading pair (e.g., 'SOLUSDC')
@@ -329,9 +339,9 @@ class Exchange:
         Returns:
             Order result or None if insufficient balance
         """
-        sol_balance = self.get_balance("SOL")
+        balance_sol = self.get_free_balance("SOL")
         
-        if sol_balance <= 0:
+        if balance_sol <= 0:
             logger.warning("No SOL balance available for sell")
             return None
         
@@ -347,23 +357,22 @@ class Exchange:
             
             if step_size:
                 # Round down to LOT_SIZE step first
-                raw_qty = math.floor(sol_balance / step_size) * step_size
+                raw_qty = math.floor(balance_sol / step_size) * step_size
             else:
-                raw_qty = sol_balance
+                raw_qty = balance_sol
 
-            # Apply final sanitization to comply with step size (e.g., 0.001 for SOL/USDC)
-            quantity = self.sanitize_quantity(raw_qty)
+            # Apply precision filter (floor to 3 decimal places)
+            qty = self.sanitize_quantity(raw_qty)
             
-            if quantity <= 0:
-                logger.warning(f"Insufficient balance: {sol_balance:.6f} SOL")
+            if qty <= 0:
+                logger.warning(f"Insufficient balance: {balance_sol:.6f} SOL")
                 return None
             
-            current_price = self.get_current_price(symbol)
             logger.info(
-                f"Selling {quantity:.6f} SOL ({(quantity/sol_balance*100.0):.2f}% of {sol_balance:.6f} SOL balance) "
-                f"@ {current_price:.4f}"
+                f"Calculated SELL qty (close position): balance_sol={balance_sol:.6f}, qty={qty:.3f}"
             )
-            return self.market_sell(symbol, quantity)
+            
+            return self.market_sell(symbol, qty)
         except Exception as e:
             logger.error(f"Error in market_sell_all_sol: {e}")
             raise

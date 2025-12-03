@@ -20,7 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Trading Parameters
 SYMBOL = "SOLUSDC"  # Trading pair
-TIMEFRAME = "3m"    # Candle interval
+TIMEFRAME = "1m"    # Candle interval
 
 # Buy Logic Parameters
 ENTRY_TOTAL_MOVE = 0.7   # Combined strength: r1 + r2 >= 0.7%

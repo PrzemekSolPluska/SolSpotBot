@@ -216,16 +216,28 @@ def main_loop():
                             order = exchange.market_buy_all_usdc(SYMBOL)
                             
                             if order:
+                                # Get actual execution price from order fills
+                                try:
+                                    fills = order.get('fills', [])
+                                    if fills:
+                                        total_qty = sum(float(f.get('qty', 0)) for f in fills)
+                                        total_cost = sum(float(f.get('price', 0)) * float(f.get('qty', 0)) for f in fills)
+                                        actual_buy_price = total_cost / total_qty if total_qty > 0 else current_price
+                                    else:
+                                        actual_buy_price = current_price
+                                except Exception:
+                                    actual_buy_price = current_price
+                                
                                 # Calculate r1, r2 for Telegram message
                                 try:
                                     r1, r2 = calculate_candle_changes(klines)
                                 except Exception:
                                     r1, r2 = 0.0, 0.0
                                 
-                                # Update state
+                                # Update state with actual execution price
                                 holding = True
-                                buy_price = current_price
-                                peak_price = current_price
+                                buy_price = actual_buy_price
+                                peak_price = actual_buy_price
                                 
                                 state["holding"] = holding
                                 state["buy_price"] = buy_price
@@ -243,9 +255,9 @@ def main_loop():
                                     qty = float(order.get('executedQty', 0))
                                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     msg = (
-                                        f"✅ BUY executed {SYMBOL}\n"
+                                        f"BUY executed {SYMBOL}\n"
                                         f"Price={buy_price:.4f}\n"
-                                        f"Qty={qty:.6f}\n"
+                                        f"Qty={qty:.3f}\n"
                                         f"Reason: 2 green candles r1={r1:.3f}%, r2={r2:.3f}%\n"
                                         f"Time={timestamp}"
                                     )
@@ -288,11 +300,47 @@ def main_loop():
                         order = exchange.market_sell_all_sol(SYMBOL)
                         
                         if order:
-                            # Calculate profits for Telegram message (capture before reset)
-                            old_buy_price = buy_price
-                            old_peak_price = peak_price
-                            sell_price = current_price
-                            profit_now_pct = ((sell_price - old_buy_price) / old_buy_price) * 100
+                            # Capture values before resetting state
+                            entry_price = buy_price
+                            peak_price_during_trade = peak_price
+                            
+                            # Get actual exit price from order execution
+                            try:
+                                # Try to get average execution price from fills
+                                fills = order.get('fills', [])
+                                if fills:
+                                    total_qty = sum(float(f.get('qty', 0)) for f in fills)
+                                    total_cost = sum(float(f.get('price', 0)) * float(f.get('qty', 0)) for f in fills)
+                                    exit_price = total_cost / total_qty if total_qty > 0 else current_price
+                                else:
+                                    # Fallback to current_price if fills not available
+                                    exit_price = current_price
+                            except Exception:
+                                exit_price = current_price
+                            
+                            # Get executed quantity for logging
+                            qty = float(order.get('executedQty', 0))
+                            
+                            # Calculate REAL realized PnL
+                            if entry_price > 0:
+                                profit_fraction = (exit_price - entry_price) / entry_price
+                                realized_pnl_percent = profit_fraction * 100.0
+                            else:
+                                realized_pnl_percent = 0.0
+                            
+                            # Calculate max profit during trade
+                            max_profit_percent = None
+                            if peak_price_during_trade > 0 and entry_price > 0:
+                                max_profit_fraction = (peak_price_during_trade - entry_price) / entry_price
+                                max_profit_percent = max_profit_fraction * 100.0
+                            
+                            # Map exit_reason to human-readable label
+                            if reason == "STOP_LOSS":
+                                exit_label = "stop-loss"
+                            elif reason == "TRAILING_TP":
+                                exit_label = "trailing TP"
+                            else:
+                                exit_label = reason or "exit"
                             
                             # Update state
                             holding = False
@@ -304,35 +352,31 @@ def main_loop():
                             state["peak_price"] = peak_price
                             save_state(state)
                             
-                            profit_pct = ((current_price - old_buy_price) / old_buy_price) * 100
+                            # Log exit details
+                            max_profit_str = f"{max_profit_percent:.2f}%" if max_profit_percent is not None else "N/A"
                             logger.info(
-                                f"SELL EXECUTED ({reason}): "
-                                f"price={current_price:.4f}, "
-                                f"buy_price={old_buy_price:.4f}, "
-                                f"profit={profit_pct:.2f}%, "
-                                f"order={order.get('orderId', 'N/A')}"
+                                f"EXIT {SYMBOL}: reason={reason}, "
+                                f"entry={entry_price:.4f}, exit={exit_price:.4f}, "
+                                f"pnl={realized_pnl_percent:+.2f}%, "
+                                f"max_profit={max_profit_str}"
                             )
                             
-                            # Telegram notification for SELL
+                            # Build improved SELL Telegram message
                             try:
-                                if reason == "TRAILING_STOP":
-                                    # Calculate peak profit for trailing stop
-                                    profit_peak_pct = ((old_peak_price - old_buy_price) / old_buy_price) * 100
-                                    msg = (
-                                        f"💰 SELL (trailing) {SYMBOL}\n"
-                                        f"Entry={old_buy_price:.4f}\n"
-                                        f"Exit={sell_price:.4f}\n"
-                                        f"Peak profit={profit_peak_pct:.2f}%\n"
-                                        f"Final profit={profit_now_pct:.2f}%"
-                                    )
-                                else:  # STOP_LOSS
-                                    msg = (
-                                        f"🛑 SELL (stop-loss) {SYMBOL}\n"
-                                        f"Entry={old_buy_price:.4f}\n"
-                                        f"Exit={sell_price:.4f}\n"
-                                        f"Loss={profit_now_pct:.2f}%"
-                                    )
-                                send_telegram_message(msg)
+                                lines = []
+                                lines.append(f"SELL ({exit_label}) {SYMBOL}")
+                                lines.append(f"Entry={entry_price:.4f}")
+                                lines.append(f"Exit={exit_price:.4f}")
+                                lines.append(f"Qty={qty:.3f}")
+                                lines.append(f"PnL={realized_pnl_percent:+.2f}%")
+                                
+                                if max_profit_percent is not None and max_profit_percent != 0:
+                                    lines.append(f"Max profit during trade={max_profit_percent:.2f}%")
+                                
+                                lines.append(f"Reason={reason}")
+                                
+                                message = "\n".join(lines)
+                                send_telegram_message(message)
                             except Exception as e:
                                 logger.warning(f"Failed to send Telegram notification for SELL: {e}")
                         else:

@@ -68,16 +68,24 @@ class Exchange:
 
     def sanitize_quantity(self, qty: float) -> float:
         """
-        Binance rejects quantities with excessive precision (ERROR -1111).
-        SOL/USDC generally accepts 3 decimal places.
+        Binance rejects quantities with excessive precision (ERROR -1111, -2010).
+        SOL/USDC requires max 3 decimal places. Uses floor to avoid rounding up.
         
         Args:
             qty: Raw quantity to sanitize
             
         Returns:
-            Quantity rounded to 3 decimal places
+            Quantity floored to 3 decimal places (max precision without rounding up)
         """
-        return float(f"{qty:.3f}")
+        if qty <= 0:
+            return 0.0
+        
+        # Floor to ensure max 3 decimals without rounding up
+        qty = math.floor(qty * 1000) / 1000
+        
+        logger.info(f"Final qty after precision filter: {qty}")
+        
+        return qty
     
     def get_free_balance(self, asset: str) -> float:
         """

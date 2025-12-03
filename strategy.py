@@ -6,6 +6,10 @@ from typing import List, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
+# Exit strategy constants
+MIN_PROFIT_TO_START_TRAILING = 0.004   # 0.4%
+TRAILING_GIVEBACK_FRACTION = 0.20      # 20% giveback
+
 
 def calculate_candle_changes(candles: List[List]) -> Tuple[float, float]:
     """
@@ -157,7 +161,10 @@ def should_sell(
     peak_price: float
 ) -> Tuple[bool, str]:
     """
-    Exit logic with hard stop-loss at -0.5% and 20% trailing take profit.
+    Exit logic with hard stop-loss at -0.5% and trailing take profit.
+    
+    Trailing TP only activates once profit_peak >= MIN_PROFIT_TO_START_TRAILING (0.4%).
+    When active, triggers if relative drawdown >= TRAILING_GIVEBACK_FRACTION (20%).
     
     Args:
         current_price: Current market price
@@ -190,18 +197,19 @@ def should_sell(
         )
         return True, "STOP_LOSS"
     
-    # Step 4: Trailing TAKE PROFIT (20% giveback from max profit)
-    if profit_peak > 0:  # Only if we had some profit
-        profit_drawdown = profit_peak - profit_now
-        relative_drawdown = profit_drawdown / profit_peak
-        
-        if relative_drawdown >= 0.20:  # 20% giveback
-            logger.warning(
-                f"TRAILING_TP triggered: relative_drawdown={relative_drawdown*100:.2f}%, "
-                f"profit_peak={profit_peak*100:.2f}%, profit_now={profit_now*100:.2f}%, "
-                f"peak_price={peak_price:.4f}, current_price={current_price:.4f}"
-            )
-            return True, "TRAILING_TP"
+    # Step 4: Trailing TAKE PROFIT (only active if profit_peak >= MIN_PROFIT_TO_START_TRAILING)
+    if profit_peak >= MIN_PROFIT_TO_START_TRAILING:
+        if profit_now > 0:
+            profit_drawdown = profit_peak - profit_now
+            relative_drawdown = profit_drawdown / profit_peak
+            
+            if relative_drawdown >= TRAILING_GIVEBACK_FRACTION:  # 20% giveback
+                logger.warning(
+                    f"TRAILING_TP triggered: relative_drawdown={relative_drawdown*100:.2f}%, "
+                    f"profit_peak={profit_peak*100:.2f}%, profit_now={profit_now*100:.2f}%, "
+                    f"peak_price={peak_price:.4f}, current_price={current_price:.4f}"
+                )
+                return True, "TRAILING_TP"
     
     # Step 5: No exit condition met
     return False, ""

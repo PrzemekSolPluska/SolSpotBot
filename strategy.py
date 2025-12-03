@@ -3,151 +3,169 @@ Trading strategy logic: buy and sell conditions
 """
 import logging
 from typing import List, Tuple, Optional
-from config import MAX_LOSS_PERCENT
 
 logger = logging.getLogger(__name__)
-
-# Breakout → Retest scalping strategy constants
-CONSOLIDATION_LEN = 6
-MAX_CONS_RANGE_PER_CANDLE = 0.35
-MAX_CONS_TOTAL_RANGE = 0.7
-MIN_BREAKOUT_BODY = 0.45
-MIN_RETRACE_FRACTION = 0.30
-MAX_RETRACE_FRACTION = 0.70
 
 
 def calculate_candle_changes(candles: List[List]) -> Tuple[float, float]:
     """
-    Calculate percentage changes for two most recent closed candles
+    Calculate percentage changes for last 2 closed candles (for display/logging purposes)
     
     Args:
-        candles: List of klines, where each kline is [open_time, open, high, low, close, volume, ...]
-                 Must have at least 3 candles: [prev, r1, r2]
+        candles: List of klines, must have at least 2 candles
     
     Returns:
-        Tuple (r1, r2) where:
-        - r1 = % change of previous closed candle
-        - r2 = % change of most recent closed candle
+        Tuple (change1, change2) where:
+        - change1 = % change of second last candle (open to close)
+        - change2 = % change of last candle (open to close)
     """
-    if len(candles) < 3:
-        raise ValueError("Need at least 3 candles to calculate changes")
+    if len(candles) < 2:
+        return 0.0, 0.0
     
-    # Get closes: prev_close, r1_close, r2_close
-    prev_close = float(candles[0][4])  # Previous candle close
-    r1_close = float(candles[1][4])     # First candle close
-    r2_close = float(candles[2][4])     # Second (most recent) candle close
+    c1 = candles[-2]
+    c2 = candles[-1]
     
-    # Calculate percentage changes
-    # r1 = change from prev_close to r1_close
-    r1 = (r1_close - prev_close) / prev_close * 100.0
+    change1 = (float(c1[4]) - float(c1[1])) / float(c1[1]) * 100.0
+    change2 = (float(c2[4]) - float(c2[1])) / float(c2[1]) * 100.0
     
-    # r2 = change from r1_close to r2_close
-    r2 = (r2_close - r1_close) / r1_close * 100.0
-    
-    return r1, r2
+    return change1, change2
 
 
-def calculate_four_candle_analysis(candles: List[List]) -> Tuple[List[float], List[bool]]:
+def check_two_candle_strategy(candles: List[List]) -> bool:
     """
-    Analyze four consecutive candles to determine which are red and their individual changes
+    Strategy A: Check last 2 closed candles for entry signal
+    
+    Conditions:
+    1. Both candles are green (change > 0)
+    2. Second candle is at least +0.20%
+    3. Sum of both candles is at least +0.35%
     
     Args:
-        candles: List of klines, where each kline is [open_time, open, high, low, close, volume, ...]
-                 Must have at least 4 candles: [c0, c1, c2, c3]
+        candles: List of klines (must have at least 2 candles)
     
     Returns:
-        Tuple (changes, is_red) where:
-        - changes: List of % change for each candle [ch0, ch1, ch2, ch3]
-        - is_red: List of bool indicating if each candle is red (close < open)
+        True if Strategy A conditions are met
+    """
+    if len(candles) < 2:
+        return False
+    
+    # Get last 2 closed candles
+    c1 = candles[-2]  # Second last closed candle
+    c2 = candles[-1]  # Last closed candle
+    
+    # Calculate % change from open to close for each candle
+    c1_open = float(c1[1])
+    c1_close = float(c1[4])
+    change1 = (c1_close - c1_open) / c1_open * 100.0
+    
+    c2_open = float(c2[1])
+    c2_close = float(c2[4])
+    change2 = (c2_close - c2_open) / c2_open * 100.0
+    
+    # Condition 1: Both candles are green
+    if change1 <= 0 or change2 <= 0:
+        return False
+    
+    # Condition 2: Second candle is at least +0.20%
+    if change2 < 0.20:
+        return False
+    
+    # Condition 3: Sum of both candles is at least +0.35%
+    if (change1 + change2) < 0.35:
+        return False
+    
+    return True
+
+
+def check_four_candle_strategy(candles: List[List]) -> bool:
+    """
+    Strategy B: Check last 4 closed candles for entry signal
+    
+    Conditions:
+    1. Total change of 4 candles is at least +0.70%
+    2. At most ONE candle is red
+    3. Last two candles cannot both be red
+    
+    Args:
+        candles: List of klines (must have at least 4 candles)
+    
+    Returns:
+        True if Strategy B conditions are met
     """
     if len(candles) < 4:
-        raise ValueError("Need at least 4 candles to calculate four-candle analysis")
+        return False
     
-    changes = []
-    is_red = []
+    # Get last 4 closed candles: d0, d1, d2, d3 (d3 is most recent)
+    d0 = candles[-4]
+    d1 = candles[-3]
+    d2 = candles[-2]
+    d3 = candles[-1]
     
-    for i in range(4):
-        candle_open = float(candles[i][1])
-        candle_close = float(candles[i][4])
-        
-        # Calculate % change for this candle
-        change = (candle_close - candle_open) / candle_open * 100.0
-        changes.append(change)
-        
-        # Check if candle is red (close < open)
-        is_red.append(candle_close < candle_open)
+    # Calculate % change from open to close for each candle
+    ch0 = (float(d0[4]) - float(d0[1])) / float(d0[1]) * 100.0
+    ch1 = (float(d1[4]) - float(d1[1])) / float(d1[1]) * 100.0
+    ch2 = (float(d2[4]) - float(d2[1])) / float(d2[1]) * 100.0
+    ch3 = (float(d3[4]) - float(d3[1])) / float(d3[1]) * 100.0
     
-    return changes, is_red
+    # Check which candles are red (close < open)
+    is_red_d0 = float(d0[4]) < float(d0[1])
+    is_red_d1 = float(d1[4]) < float(d1[1])
+    is_red_d2 = float(d2[4]) < float(d2[1])
+    is_red_d3 = float(d3[4]) < float(d3[1])
+    
+    # Count red candles
+    red_count = sum([is_red_d0, is_red_d1, is_red_d2, is_red_d3])
+    
+    # Calculate total change
+    total_change = ch0 + ch1 + ch2 + ch3
+    
+    # Condition 1: Total change is at least +0.70%
+    if total_change < 0.70:
+        return False
+    
+    # Condition 2: At most ONE candle is red
+    if red_count > 1:
+        return False
+    
+    # Condition 3: Last two candles cannot both be red
+    if is_red_d2 and is_red_d3:
+        return False
+    
+    return True
 
 
 def should_buy(candles: List[List]) -> bool:
     """
-    Dynamic Breakout → Retest scalping strategy.
+    Entry logic with two independent strategies (A or B).
     
-    1. Detect a consolidation zone (tight range, last 6 candles).
-    2. Detect a strong breakout candle piercing the consolidation.
-    3. Enter on a retest if the pullback fits retracement criteria.
+    Strategy A: Last 2 candles - both green, second >= 0.20%, sum >= 0.35%
+    Strategy B: Last 4 candles - total >= 0.70%, at most 1 red, last two not both red
     
     Args:
-        candles: List of klines
+        candles: List of klines (1-minute candles)
     
     Returns:
-        True if buy conditions are met
+        True if Strategy A OR Strategy B conditions are met
     """
-    if len(candles) < CONSOLIDATION_LEN + 2:
+    # Need at least 4 closed candles to check both strategies
+    if len(candles) < 4:
         return False
     
-    recent = candles[-(CONSOLIDATION_LEN + 2):]
+    # Check Strategy A (last 2 candles)
+    strategy_a = check_two_candle_strategy(candles)
     
-    cons = recent[:-2]
-    breakout = recent[-2]
-    retest = recent[-1]
+    # Check Strategy B (last 4 candles)
+    strategy_b = check_four_candle_strategy(candles)
     
-    cons_high = max(float(c[2]) for c in cons)
-    cons_low = min(float(c[3]) for c in cons)
+    if strategy_a:
+        logger.info("BUY SIGNAL (Strategy A - 2 candles): Both green, second >= 0.20%, sum >= 0.35%")
+        return True
     
-    total_cons_range = (cons_high - cons_low) / cons_low * 100.0
-    if total_cons_range > MAX_CONS_TOTAL_RANGE:
-        return False
+    if strategy_b:
+        logger.info("BUY SIGNAL (Strategy B - 4 candles): Total >= 0.70%, at most 1 red, last two not both red")
+        return True
     
-    for c in cons:
-        rng = (float(c[2]) - float(c[3])) / float(c[3]) * 100.0
-        if rng > MAX_CONS_RANGE_PER_CANDLE:
-            return False
-    
-    breakout_open = float(breakout[1])
-    breakout_close = float(breakout[4])
-    breakout_body = (breakout_close - breakout_open) / breakout_open * 100.0
-    
-    if breakout_close <= cons_high:
-        return False
-    if breakout_body < MIN_BREAKOUT_BODY:
-        return False
-    
-    retest_low = float(retest[3])
-    pullback = cons_high - retest_low
-    full_break = breakout_close - cons_high
-    
-    if full_break <= 0:
-        return False
-    
-    retrace_fraction = pullback / full_break
-    
-    if retrace_fraction < MIN_RETRACE_FRACTION:
-        return False
-    if retrace_fraction > MAX_RETRACE_FRACTION:
-        return False
-    
-    if float(retest[4]) <= float(retest[1]):
-        return False
-    
-    logger.info(
-        f"BUY SIGNAL (BREAKOUT-RETEST): "
-        f"cons_range={total_cons_range:.4f}%, "
-        f"breakout_body={breakout_body:.4f}%, "
-        f"retrace_fraction={retrace_fraction:.4f}"
-    )
-    return True
+    return False
 
 
 def should_sell(
@@ -156,7 +174,7 @@ def should_sell(
     peak_price: float
 ) -> Tuple[bool, str]:
     """
-    Scalp strategy: Exit with hard stop-loss at -0.4% or trailing TP at 0.2% drop from peak.
+    Exit logic with hard stop-loss at -0.5% and 20% trailing take profit.
     
     Args:
         current_price: Current market price
@@ -166,12 +184,13 @@ def should_sell(
     Returns:
         Tuple (should_sell, reason) where:
         - should_sell: True if we should sell
-        - reason: "TRAILING_STOP" or "STOP_LOSS"
+        - reason: "STOP_LOSS" or "TRAILING_TP"
     """
+    # Step 1: Check if buy_price is valid
     if buy_price <= 0:
         return False, ""
     
-    # Calculate profits
+    # Step 2: Compute current and peak profit (fractions, not percents)
     profit_now = (current_price - buy_price) / buy_price
     profit_peak = (peak_price - buy_price) / buy_price
     
@@ -181,23 +200,26 @@ def should_sell(
         f"profit_peak={profit_peak*100:.2f}%"
     )
     
-    # Hard stop-loss: -0.4% loss
-    if profit_now <= -MAX_LOSS_PERCENT:
+    # Step 3: STOP LOSS at -0.5%
+    if profit_now <= -0.005:  # -0.5%
         logger.warning(
-            f"STOP LOSS triggered: profit_now={profit_now*100:.2f}% <= -{MAX_LOSS_PERCENT*100}%"
+            f"STOP LOSS triggered: profit_now={profit_now*100:.2f}% <= -0.5%"
         )
         return True, "STOP_LOSS"
     
-    # Trailing TP: price drop of 0.20% from peak
-    if peak_price > buy_price:
-        drawdown_from_peak = (peak_price - current_price) / peak_price
+    # Step 4: Trailing TAKE PROFIT (20% giveback from max profit)
+    if profit_peak > 0:  # Only if we had some profit
+        profit_drawdown = profit_peak - profit_now
+        relative_drawdown = profit_drawdown / profit_peak
         
-        if drawdown_from_peak >= 0.002:  # 0.20%
+        if relative_drawdown >= 0.20:  # 20% giveback
             logger.warning(
-                f"TRAILING STOP triggered: drawdown_from_peak={drawdown_from_peak*100:.2f}%, "
+                f"TRAILING_TP triggered: relative_drawdown={relative_drawdown*100:.2f}%, "
+                f"profit_peak={profit_peak*100:.2f}%, profit_now={profit_now*100:.2f}%, "
                 f"peak_price={peak_price:.4f}, current_price={current_price:.4f}"
             )
-            return True, "TRAILING_STOP"
+            return True, "TRAILING_TP"
     
+    # Step 5: No exit condition met
     return False, ""
 

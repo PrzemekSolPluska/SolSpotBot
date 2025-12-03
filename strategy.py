@@ -37,8 +37,7 @@ def check_two_candle_strategy(candles: List[List]) -> bool:
     
     Conditions:
     1. Both candles are green (change > 0)
-    2. Second candle is at least +0.20%
-    3. Sum of both candles is at least +0.35%
+    2. Sum of both candles is at least +0.25%
     
     Args:
         candles: List of klines (must have at least 2 candles)
@@ -66,12 +65,8 @@ def check_two_candle_strategy(candles: List[List]) -> bool:
     if change1 <= 0 or change2 <= 0:
         return False
     
-    # Condition 2: Second candle is at least +0.20%
-    if change2 < 0.20:
-        return False
-    
-    # Condition 3: Sum of both candles is at least +0.35%
-    if (change1 + change2) < 0.35:
+    # Condition 2: Sum of both candles is at least +0.25%
+    if (change1 + change2) < 0.25:
         return False
     
     return True
@@ -82,9 +77,8 @@ def check_four_candle_strategy(candles: List[List]) -> bool:
     Strategy B: Check last 4 closed candles for entry signal
     
     Conditions:
-    1. Total change of 4 candles is at least +0.70%
-    2. At most ONE candle is red
-    3. Last two candles cannot both be red
+    1. Total change of 4 candles is at least +0.45%
+    2. Last candle must NOT be red (close >= open)
     
     Args:
         candles: List of klines (must have at least 4 candles)
@@ -107,28 +101,17 @@ def check_four_candle_strategy(candles: List[List]) -> bool:
     ch2 = (float(d2[4]) - float(d2[1])) / float(d2[1]) * 100.0
     ch3 = (float(d3[4]) - float(d3[1])) / float(d3[1]) * 100.0
     
-    # Check which candles are red (close < open)
-    is_red_d0 = float(d0[4]) < float(d0[1])
-    is_red_d1 = float(d1[4]) < float(d1[1])
-    is_red_d2 = float(d2[4]) < float(d2[1])
-    is_red_d3 = float(d3[4]) < float(d3[1])
-    
-    # Count red candles
-    red_count = sum([is_red_d0, is_red_d1, is_red_d2, is_red_d3])
-    
     # Calculate total change
     total_change = ch0 + ch1 + ch2 + ch3
     
-    # Condition 1: Total change is at least +0.70%
-    if total_change < 0.70:
+    # Condition 1: Total change is at least +0.45%
+    if total_change < 0.45:
         return False
     
-    # Condition 2: At most ONE candle is red
-    if red_count > 1:
-        return False
-    
-    # Condition 3: Last two candles cannot both be red
-    if is_red_d2 and is_red_d3:
+    # Condition 2: Last candle must NOT be red (close >= open)
+    d3_open = float(d3[1])
+    d3_close = float(d3[4])
+    if d3_close < d3_open:
         return False
     
     return True
@@ -138,8 +121,8 @@ def should_buy(candles: List[List]) -> bool:
     """
     Entry logic with two independent strategies (A or B).
     
-    Strategy A: Last 2 candles - both green, second >= 0.20%, sum >= 0.35%
-    Strategy B: Last 4 candles - total >= 0.70%, at most 1 red, last two not both red
+    Strategy A: Last 2 candles - both green, sum >= 0.25%
+    Strategy B: Last 4 candles - total >= 0.45%, last candle not red
     
     Args:
         candles: List of klines (1-minute candles)
@@ -158,11 +141,11 @@ def should_buy(candles: List[List]) -> bool:
     strategy_b = check_four_candle_strategy(candles)
     
     if strategy_a:
-        logger.info("BUY SIGNAL (Strategy A - 2 candles): Both green, second >= 0.20%, sum >= 0.35%")
+        logger.info("BUY SIGNAL (Strategy A - 2 candles): Both green, total move >= +0.25%")
         return True
     
     if strategy_b:
-        logger.info("BUY SIGNAL (Strategy B - 4 candles): Total >= 0.70%, at most 1 red, last two not both red")
+        logger.info("BUY SIGNAL (Strategy B - 4 candles): Sum >= +0.45%, last candle not red")
         return True
     
     return False

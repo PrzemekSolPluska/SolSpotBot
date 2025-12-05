@@ -3,11 +3,11 @@ Trading strategy logic: buy and sell conditions
 """
 import logging
 from typing import List, Tuple, Optional
+from config import MAX_LOSS_PERCENT
 
 logger = logging.getLogger(__name__)
 
 # Exit strategy constants
-MIN_PROFIT_TO_START_TRAILING = 0.004   # 0.4%
 TRAILING_GIVEBACK_FRACTION = 0.20      # 20% giveback
 
 
@@ -161,56 +161,58 @@ def should_sell(
     peak_price: float
 ) -> Tuple[bool, str]:
     """
-    Exit logic with hard stop-loss at -0.5% and trailing take profit.
-    
-    Trailing TP only activates once profit_peak >= MIN_PROFIT_TO_START_TRAILING (0.4%).
-    When active, triggers if relative drawdown >= TRAILING_GIVEBACK_FRACTION (20%).
-    
-    Args:
-        current_price: Current market price
-        buy_price: Price at which we bought
-        peak_price: Highest price reached since buy
-    
-    Returns:
-        Tuple (should_sell, reason) where:
-        - should_sell: True if we should sell
-        - reason: "STOP_LOSS" or "TRAILING_TP"
+    Exit strategy:
+    - Hard stop-loss at -MAX_LOSS_PERCENT (e.g. -0.10%).
+    - Trailing take profit, always active once the trade is in profit:
+      we track the maximum profit reached, and exit when the current profit
+      has given back TRAILING_GIVEBACK_FRACTION (e.g. 20%) of that max profit,
+      as long as we are still above 0% profit.
     """
-    # Step 1: Check if buy_price is valid
+    # If we don't have a valid buy price, we can't decide anything
     if buy_price <= 0:
         return False, ""
-    
-    # Step 2: Compute current and peak profit (fractions, not percents)
+
+    # Profit as fractions of entry price
     profit_now = (current_price - buy_price) / buy_price
     profit_peak = (peak_price - buy_price) / buy_price
-    
+
     logger.debug(
-        f"Price check: current={current_price:.4f}, buy={buy_price:.4f}, "
-        f"peak={peak_price:.4f}, profit_now={profit_now*100:.2f}%, "
-        f"profit_peak={profit_peak*100:.2f}%"
+        f"Profit check: current_price={current_price:.4f}, buy_price={buy_price:.4f}, "
+        f"peak_price={peak_price:.4f}, profit_now={profit_now*100:.4f}%, "
+        f"profit_peak={profit_peak*100:.4f}%"
     )
-    
-    # Step 3: STOP LOSS at -0.5%
-    if profit_now <= -0.005:  # -0.5%
+
+    # 1) Hard stop-loss: e.g. -0.10% from entry
+    if profit_now <= -MAX_LOSS_PERCENT:
         logger.warning(
-            f"STOP LOSS triggered: profit_now={profit_now*100:.2f}% <= -0.5%"
+            f"STOP LOSS triggered: profit_now={profit_now*100:.4f}% <= -{MAX_LOSS_PERCENT*100:.3f}%"
         )
         return True, "STOP_LOSS"
-    
-    # Step 4: Trailing TAKE PROFIT (only active if profit_peak >= MIN_PROFIT_TO_START_TRAILING)
-    if profit_peak >= MIN_PROFIT_TO_START_TRAILING:
-        if profit_now > 0:
-            profit_drawdown = profit_peak - profit_now
-            relative_drawdown = profit_drawdown / profit_peak
-            
-            if relative_drawdown >= TRAILING_GIVEBACK_FRACTION:  # 20% giveback
-                logger.warning(
-                    f"TRAILING_TP triggered: relative_drawdown={relative_drawdown*100:.2f}%, "
-                    f"profit_peak={profit_peak*100:.2f}%, profit_now={profit_now*100:.2f}%, "
-                    f"peak_price={peak_price:.4f}, current_price={current_price:.4f}"
-                )
-                return True, "TRAILING_TP"
-    
-    # Step 5: No exit condition met
+
+    # 2) Trailing take profit: always active once the trade is in profit
+    #    We only apply trailing if:
+    #    - we have seen some positive peak profit (profit_peak > 0)
+    #    - we are still in profit now (profit_now > 0)
+    if profit_peak > 0 and profit_now > 0:
+        profit_drawdown = profit_peak - profit_now
+        relative_drawdown = profit_drawdown / profit_peak
+
+        logger.debug(
+            f"Trailing check: profit_now={profit_now*100:.4f}%, "
+            f"profit_peak={profit_peak*100:.4f}%, "
+            f"profit_drawdown={profit_drawdown*100:.4f}%, "
+            f"relative_drawdown={relative_drawdown*100:.4f}%"
+        )
+
+        # If we have given back 20% or more of the maximum profit, exit with TRAILING_TP
+        if relative_drawdown >= TRAILING_GIVEBACK_FRACTION:
+            logger.warning(
+                f"TRAILING_TP triggered: relative_drawdown={relative_drawdown*100:.4f}% "
+                f"(>= {TRAILING_GIVEBACK_FRACTION*100:.1f}%), "
+                f"profit_now={profit_now*100:.4f}%, profit_peak={profit_peak*100:.4f}%"
+            )
+            return True, "TRAILING_TP"
+
+    # 3) Otherwise, hold the position
     return False, ""
 

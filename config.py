@@ -28,7 +28,7 @@ ENTRY_MIN_SECOND = 0.35  # Second candle must be >= 0.35%
 
 # Sell Logic Parameters
 TRAILING_SHARE = 0.2      # 20% trailing stop
-MAX_LOSS_PERCENT = 0.004  # 0.4% hard stop-loss
+MAX_LOSS_PERCENT = 0.001  # 0.10% hard stop-loss
 
 # Loop Parameters
 LOOP_INTERVAL = 7  # Seconds between loop iterations (5-10 seconds)
